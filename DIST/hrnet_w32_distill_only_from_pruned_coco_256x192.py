@@ -9,7 +9,7 @@ sys.path.insert(0, './experiments/DIST')
 
 custom_imports = dict(
     imports=[
-        'experiments.DIST.distill_prune',
+        'experiments.DIST.distill_only',
         'experiments.DIST.custom_hooks',
     ],
     allow_failed_imports=False,
@@ -17,13 +17,15 @@ custom_imports = dict(
 
 evaluation = dict(interval=10, metric='mAP', save_best='AP')
 
+overall_log_name = 'DIST_distill_only_all.log'
+
 optimizer = dict(type='Adam', lr=5e-5)
 optimizer_config = dict(grad_clip=None)
 
 fp16 = dict(loss_scale=512.0)
 
 lr_config = dict(policy='step', step=[])
-total_epochs = 700
+total_epochs = 200
 
 target_type = 'GaussianHeatmap'
 channel_cfg = dict(
@@ -262,7 +264,7 @@ teacher_model = dict(
 
 student_model = dict(
     type='TopDown',
-    pretrained='/root/rivermind-data/PoseBH/weights/hrnet/hrnet_w32_coco_256x192.pth',
+    pretrained=None,
     backbone=dict(
         type='HRNet',
         in_channels=3,
@@ -293,9 +295,10 @@ student_model = dict(
 )
 
 model = dict(
-    type='TopDownDistillPrune',
+    type='TopDownDistillOnly',
     teacher=teacher_model,
     student=student_model,
+    student_init_ckpt='',
     distill_cfg=dict(
         heatmap_loss_weight=1.8,
         proto_loss_weight=1.0,
@@ -310,44 +313,6 @@ model = dict(
 
 custom_hooks = [
     dict(
-        type='HRNetPruneRecoverHook',
-        start_epoch=1,
-        interval=10,
-        force_prune_start_epoch=1,
-        immediate_prune_at_start=True,
-        prune_step_ratio=0.105,
-        max_prune_ratio=0.75,
-        post_switch_ratio=0.5,
-        post_step_ratio=0.055,
-        step_schedule=(
-            dict(until=0.5, step=0.105),
-            dict(until=1.0, step=0.055),
-        ),
-        round_to=16,
-        min_ap_drop=0.003,
-        recover_margin=0.0,
-        recover_drop_tolerance=0.003,
-        recovery_schedule_base_ap=0.7600,
-        recovery_schedule_drop_per_10p=0.003,
-        recovery_schedule_ratio_unit=0.1,
-        use_ratio_based_recovery=True,
-        force_prune_gap=0.01,
-        force_prune_max_steps=6,
-        target_ap=0.7573,
-        force_prune=True,
-        force_eval_if_missing_ap=True,
-        importance_criterion='bn_gamma',
-        save_prune_ckpt=True,
-        prune_stages=(3, 4),
-        prune_branches_stage3=(2,),
-        prune_branches_stage4=(2, 3),
-        prune_protected_layers=(
-            'student.keypoint_head',
-            '_proto_adaptor',
-        ),
-        priority='LOW',
-    ),
-    dict(
         type='EarlyStopByMetricHook',
         monitor='AP',
         min_delta=0.001,
@@ -357,4 +322,4 @@ custom_hooks = [
     ),
 ]
 
-work_dir = 'experiments/DIST/work_dirs/hrnet_w32_distill_prune_coco_256x192'
+work_dir = 'experiments/DIST/work_dirs/hrnet_w32_distill_only_from_pruned_coco_256x192'

@@ -4,6 +4,11 @@
 *.ckpt
 *.weights
 work_dirs/**/*.pth
+work_dirs/**
+logs/**
+*.log
+*.log.json
+mapping_report.json
 weights/*.pth
 split_weights/*.pth
 hrnet_w32_distill_prune_coco_256x192/

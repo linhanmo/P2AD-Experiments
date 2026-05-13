@@ -5,11 +5,12 @@ _base_ = [
 
 import sys
 
-sys.path.insert(0, './experiments/DIST')
+sys.path.insert(0, './experiments/DIST_INNOV')
 
 custom_imports = dict(
     imports=[
-        'experiments.DIST.distill_prune',
+        'experiments.DIST_INNOV.distill_prune_innov',
+        'experiments.DIST_INNOV.custom_hooks_innov',
         'experiments.DIST.custom_hooks',
     ],
     allow_failed_imports=False,
@@ -82,11 +83,7 @@ val_pipeline = [
     dict(type='TopDownAffine', use_udp=True),
     dict(type='ToTensor'),
     dict(type='NormalizeTensor', mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    dict(
-        type='Collect',
-        keys=['img'],
-        meta_keys=['image_file', 'center', 'scale', 'rotation', 'bbox_score', 'flip_pairs'],
-    ),
+    dict(type='Collect', keys=['img'], meta_keys=['image_file', 'center', 'scale', 'rotation', 'bbox_score', 'flip_pairs']),
 ]
 
 test_pipeline = val_pipeline
@@ -262,7 +259,7 @@ teacher_model = dict(
 
 student_model = dict(
     type='TopDown',
-    pretrained='/root/rivermind-data/PoseBH/weights/hrnet/hrnet_w32_coco_256x192.pth',
+    pretrained=None,
     backbone=dict(
         type='HRNet',
         in_channels=3,
@@ -293,68 +290,91 @@ student_model = dict(
 )
 
 model = dict(
-    type='TopDownDistillPrune',
+    type='TopDownDistillPruneInnov',
     teacher=teacher_model,
     student=student_model,
+    student_init_ckpt='/root/rivermind-data/PoseBH/weights/hrnet/pose_hrnet_w32_256x192.pth',
     distill_cfg=dict(
         heatmap_loss_weight=1.8,
-        proto_loss_weight=1.0,
         kd_hm_weight=0.1,
         kd_proto_weight=0.15,
         temperature=1.0,
         proto_adaptor_out_channels=64,
         sup_ratio_enforce_iters=100,
         min_sup_ratio=0.9,
+        dynamic_kd=dict(enable=False),
+        adaptive_align=dict(enable=False),
+        pose_prune=dict(
+            enable=False,
+            ema_momentum=0.95,
+            attn_temperature=1.0,
+            protect_mode='none',
+            protect_ratio=0.5,
+            per_joint_min=1,
+            tail_percentile=0.3,
+            tail_boost=2.0,
+            bn_mix=0.15,
+            score_power=1.0,
+        ),
+        heatmap_guided_align=dict(enable=False),
     ),
 )
 
-custom_hooks = [
-    dict(
-        type='HRNetPruneRecoverHook',
-        start_epoch=1,
-        interval=10,
-        force_prune_start_epoch=1,
-        immediate_prune_at_start=True,
-        prune_step_ratio=0.105,
-        max_prune_ratio=0.75,
-        post_switch_ratio=0.5,
-        post_step_ratio=0.055,
-        step_schedule=(
-            dict(until=0.5, step=0.105),
-            dict(until=1.0, step=0.055),
-        ),
-        round_to=16,
-        min_ap_drop=0.003,
-        recover_margin=0.0,
-        recover_drop_tolerance=0.003,
-        recovery_schedule_base_ap=0.7600,
-        recovery_schedule_drop_per_10p=0.003,
-        recovery_schedule_ratio_unit=0.1,
-        use_ratio_based_recovery=True,
-        force_prune_gap=0.01,
-        force_prune_max_steps=6,
-        target_ap=0.7573,
-        force_prune=True,
-        force_eval_if_missing_ap=True,
-        importance_criterion='bn_gamma',
-        save_prune_ckpt=True,
-        prune_stages=(3, 4),
-        prune_branches_stage3=(2,),
-        prune_branches_stage4=(2, 3),
-        prune_protected_layers=(
-            'student.keypoint_head',
-            '_proto_adaptor',
-        ),
-        priority='LOW',
-    ),
-    dict(
-        type='EarlyStopByMetricHook',
-        monitor='AP',
-        min_delta=0.001,
-        patience=2,
-        interval=10,
-        priority='LOWEST',
-    ),
-]
+state_hook = dict(
+    type='DistillScheduleStateHook',
+    prune_ratio_key='param_prune_rate',
+    fallback_to_meta=True,
+    priority='LOWEST',
+)
 
-work_dir = 'experiments/DIST/work_dirs/hrnet_w32_distill_prune_coco_256x192'
+prune_hook = dict(
+    type='HRNetPruneRecoverHook',
+    start_epoch=1,
+    interval=10,
+    force_prune_start_epoch=None,
+    immediate_prune_at_start=True,
+    prune_step_ratio=0.105,
+    max_prune_ratio=0.75,
+    post_switch_ratio=0.5,
+    post_step_ratio=0.055,
+    step_schedule=(
+        dict(until=0.10, step=0.060),
+        dict(until=0.5, step=0.105),
+        dict(until=1.0, step=0.055),
+    ),
+    round_to=16,
+    min_ap_drop=0.003,
+    recover_margin=0.0,
+    recover_drop_tolerance=0.003,
+    recovery_schedule_base_ap=0.7600,
+    recovery_schedule_drop_per_10p=0.003,
+    recovery_schedule_ratio_unit=0.1,
+    use_ratio_based_recovery=True,
+    force_prune_gap=0.01,
+    force_prune_max_steps=6,
+    target_ap=0.7573,
+    force_prune=True,
+    force_eval_if_missing_ap=True,
+    importance_criterion='bn_gamma',
+    save_prune_ckpt=True,
+    prune_stages=(3, 4),
+    prune_branches_stage3=(2,),
+    prune_branches_stage4=(2, 3),
+    prune_protected_layers=(
+        'student.keypoint_head',
+        '_proto_adaptor',
+        '_adaptive_align',
+    ),
+    priority='LOW',
+)
+
+early_stop_hook = dict(
+    type='EarlyStopByMetricHook',
+    monitor='AP',
+    min_delta=0.001,
+    patience=2,
+    interval=10,
+    priority='LOWEST',
+)
+
+custom_hooks = [state_hook, prune_hook, early_stop_hook]

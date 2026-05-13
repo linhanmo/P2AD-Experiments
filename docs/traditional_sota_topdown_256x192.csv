@@ -1,0 +1,6 @@
+venue,year,method,role,input_size,dataset_split,AP(%),AP50(%),AP75(%),AR(%),params(M),GFLOPs,notes,source
+CVPR,2019,HRNet-W32,student_baseline,256x192,COCO val2017,74.4,90.5,81.9,79.8,28.5,7.1,"Top-down heatmap; detector person AP=56.4","https://github.com/HRNet/HRNet-Human-Pose-Estimation"
+CVPR,2021,Lite-HRNet-30,student_reference,256x192,COCO val2017,67.2,,,73.3,1.8,0.3192,"Top-down heatmap; FLOPs=319.2M; detector person AP=56.4","https://github.com/HRNet/Lite-HRNet"
+NeurIPS,2022,ViTPose-B (classic decoder),teacher_reference,256x192,COCO val,75.8,,,81.1,,,"Top-down heatmap; MAE pretrain; detector person AP=56 mAP (per repo)","https://github.com/ViTAE-Transformer/ViTPose"
+NeurIPS,2022,ViTPose-L (classic decoder),teacher_reference,256x192,COCO val,78.3,,,83.5,,,"Top-down heatmap; MAE pretrain; detector person AP=56 mAP (per repo)","https://github.com/ViTAE-Transformer/ViTPose"
+NeurIPS,2022,ViTPose-H (classic decoder),teacher_reference,256x192,COCO val,79.1,,,84.1,,,"Top-down heatmap; MAE pretrain; detector person AP=56 mAP (per repo)","https://github.com/ViTAE-Transformer/ViTPose"

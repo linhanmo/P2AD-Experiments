@@ -1,0 +1,9 @@
+source,venue,year,method,input_size,split,detector_setting,AP,AP50,AP75,AR,params_M,gflops,eq_prune_rate_params,eq_prune_rate_gflops,baseline_params_M,baseline_gflops,notes
+HRNet-Human-Pose-Estimation, CVPR,2019,pose_hrnet_w32,256x192,COCO val2017,person AP=56.4,0.744,0.905,0.819,0.798,28.5,7.1,0.0000,0.0000,28.5,7.1,baseline for equivalent prune rate
+HRNet-Human-Pose-Estimation, ECCV,2018,pose_resnet_50,256x192,COCO val2017,person AP=56.4,0.704,0.886,0.783,0.763,34.0,8.9,-0.1930,-0.2535,28.5,7.1,heavier than baseline (negative eq_prune_rate)
+HRNet-Human-Pose-Estimation, ECCV,2018,pose_resnet_101,256x192,COCO val2017,person AP=56.4,0.714,0.893,0.793,0.771,53.0,12.4,-0.8596,-0.7465,28.5,7.1,heavier than baseline (negative eq_prune_rate)
+HRNet-Human-Pose-Estimation, ECCV,2018,pose_resnet_152,256x192,COCO val2017,person AP=56.4,0.720,0.893,0.798,0.778,68.6,15.7,-1.4070,-1.2113,28.5,7.1,heavier than baseline (negative eq_prune_rate)
+Lite-HRNet, CVPR,2021,Naive Lite-HRNet-18,256x192,COCO val2017,person AP=56.4,0.628,0.855,0.699,0.691,0.7,0.1948,0.9754,0.9726,28.5,7.1,eq_prune_rate computed vs HRNet-W32 baseline
+Lite-HRNet, CVPR,2021,Wider Naive Lite-HRNet-18,256x192,COCO val2017,person AP=56.4,0.660,0.871,0.737,0.721,1.3,0.3111,0.9544,0.9562,28.5,7.1,eq_prune_rate computed vs HRNet-W32 baseline
+Lite-HRNet, CVPR,2021,Lite-HRNet-18,256x192,COCO val2017,person AP=56.4,0.648,0.867,0.730,0.712,1.1,0.2052,0.9614,0.9711,28.5,7.1,eq_prune_rate computed vs HRNet-W32 baseline
+Lite-HRNet, CVPR,2021,Lite-HRNet-30,256x192,COCO val2017,person AP=56.4,0.672,0.880,0.750,0.733,1.8,0.3192,0.9368,0.9550,28.5,7.1,eq_prune_rate computed vs HRNet-W32 baseline

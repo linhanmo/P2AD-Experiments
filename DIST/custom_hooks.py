@@ -360,14 +360,16 @@ class HRNetStructuredPruneHook(Hook):
         if hasattr(model, 'prune_student_backbone_extra'):
             channel_map = None
             try:
-                from experiments.DIST.distill_prune import _build_hrnet_channel_index_map
+                crit = str(self.importance_criterion).lower()
+                if not (crit.startswith('pose') or crit.startswith('kpt')):
+                    from experiments.DIST.distill_prune import _build_hrnet_channel_index_map
 
-                if hasattr(model, 'student') and hasattr(model.student, 'state_dict'):
-                    channel_map = _build_hrnet_channel_index_map(
-                        model.student.state_dict(),
-                        new_extra,
-                        criterion=self.importance_criterion,
-                    )
+                    if hasattr(model, 'student') and hasattr(model.student, 'state_dict'):
+                        channel_map = _build_hrnet_channel_index_map(
+                            model.student.state_dict(),
+                            new_extra,
+                            criterion=self.importance_criterion,
+                        )
             except Exception:
                 channel_map = None
             model.prune_student_backbone_extra(
@@ -471,10 +473,12 @@ class HRNetPruneRecoverHook(Hook):
         start_epoch=70,
         interval=10,
         force_prune_start_epoch=None,
+        immediate_prune_at_start=False,
         prune_step_ratio=0.1,
         max_prune_ratio=0.5,
         post_switch_ratio=0.4,
         post_step_ratio=0.05,
+        step_schedule=None,
         round_to=16,
         min_ap_drop=0.003,
         recover_margin=0.0,
@@ -498,10 +502,28 @@ class HRNetPruneRecoverHook(Hook):
         self.start_epoch = int(start_epoch)
         self.interval = int(interval)
         self.force_prune_start_epoch = None if force_prune_start_epoch is None else int(force_prune_start_epoch)
+        self.immediate_prune_at_start = bool(immediate_prune_at_start)
         self.prune_step_ratio = float(prune_step_ratio)
         self.max_prune_ratio = float(max_prune_ratio)
         self.post_switch_ratio = float(post_switch_ratio)
         self.post_step_ratio = float(post_step_ratio)
+        self.step_schedule = None
+        if step_schedule is not None:
+            try:
+                ss = []
+                for it in list(step_schedule):
+                    if not isinstance(it, dict):
+                        continue
+                    until = it.get('until', None)
+                    step = it.get('step', None)
+                    if until is None or step is None:
+                        continue
+                    ss.append(dict(until=float(until), step=float(step)))
+                ss = sorted(ss, key=lambda x: float(x['until']))
+                if ss:
+                    self.step_schedule = ss
+            except Exception:
+                self.step_schedule = None
         self.round_to = int(round_to)
         self.min_ap_drop = float(min_ap_drop)
         self.recover_margin = float(recover_margin)
@@ -529,6 +551,21 @@ class HRNetPruneRecoverHook(Hook):
         self.recovering = False
         self.recover_target_ap = None
         self._forced_start_prune_done = False
+
+    def _pick_step_ratio(self, cur_ratio):
+        r = max(0.0, min(1.0, float(cur_ratio)))
+        if isinstance(self.step_schedule, list) and self.step_schedule:
+            for it in self.step_schedule:
+                try:
+                    if r <= float(it['until']) + 1.0e-12:
+                        return float(it['step'])
+                except Exception:
+                    continue
+            try:
+                return float(self.step_schedule[-1]['step'])
+            except Exception:
+                return float(self.post_step_ratio)
+        return float(self.prune_step_ratio) if r < float(self.post_switch_ratio) - 1.0e-9 else float(self.post_step_ratio)
 
     def before_run(self, runner):
         model = getattr(runner.model, 'module', runner.model)
@@ -588,7 +625,12 @@ class HRNetPruneRecoverHook(Hook):
             return
         if current_epoch < self.start_epoch:
             return
-        if current_epoch % self.interval != 0:
+        immediate_once = (
+            bool(self.immediate_prune_at_start)
+            and int(self.prune_step) <= 0
+            and int(current_epoch) == int(self.start_epoch)
+        )
+        if (current_epoch % self.interval != 0) and (not immediate_once):
             return
 
         ap_now = _logbuffer_get_last(runner.log_buffer, 'AP')
@@ -644,7 +686,7 @@ class HRNetPruneRecoverHook(Hook):
 
         next_step = int(self.prune_step) + 1
         cur_ratio = float(self.target_ratio)
-        step_ratio = self.prune_step_ratio if cur_ratio < self.post_switch_ratio - 1.0e-9 else self.post_step_ratio
+        step_ratio = self._pick_step_ratio(cur_ratio)
         target_ratio = min(self.max_prune_ratio, cur_ratio + float(step_ratio))
         target_ratio = max(0.0, min(1.0, float(target_ratio)))
         self.target_ratio = float(target_ratio)
@@ -691,6 +733,36 @@ class HRNetPruneRecoverHook(Hook):
                 prune_branches_stage4=self.prune_branches_stage4,
                 alpha=1.0,
             )
+
+        if isinstance(current_extra, dict) and isinstance(new_extra, dict):
+            try:
+                stage3_new = new_extra.get('stage3', {})
+                stage4_new = new_extra.get('stage4', {})
+                stage3_cur = current_extra.get('stage3', {})
+                stage4_cur = current_extra.get('stage4', {})
+                s3_new = list(stage3_new.get('num_channels', ()))
+                s4_new = list(stage4_new.get('num_channels', ()))
+                s3_cur = list(stage3_cur.get('num_channels', ()))
+                s4_cur = list(stage4_cur.get('num_channels', ()))
+                monotonic_changed = False
+                if 3 in self.prune_stages:
+                    for i in range(min(len(s3_new), len(s3_cur))):
+                        if i in self.prune_branches_stage3 and int(s3_new[i]) > int(s3_cur[i]):
+                            s3_new[i] = int(s3_cur[i])
+                            monotonic_changed = True
+                if 4 in self.prune_stages:
+                    for i in range(min(len(s4_new), len(s4_cur))):
+                        if i in self.prune_branches_stage4 and int(s4_new[i]) > int(s4_cur[i]):
+                            s4_new[i] = int(s4_cur[i])
+                            monotonic_changed = True
+                if monotonic_changed:
+                    stage3_new['num_channels'] = tuple(int(x) for x in s3_new)
+                    stage4_new['num_channels'] = tuple(int(x) for x in s4_new)
+                    new_extra['stage3'] = stage3_new
+                    new_extra['stage4'] = stage4_new
+                    runner.logger.info(f'Clamp prune extra to be monotonic at epoch {current_epoch}')
+            except Exception:
+                pass
 
         def _force_one_step(ex):
             stage3 = ex.get('stage3', {})
@@ -765,14 +837,16 @@ class HRNetPruneRecoverHook(Hook):
         if hasattr(model, 'prune_student_backbone_extra'):
             channel_map = None
             try:
-                from experiments.DIST.distill_prune import _build_hrnet_channel_index_map
+                crit = str(self.importance_criterion).lower()
+                if not (crit.startswith('pose') or crit.startswith('kpt')):
+                    from experiments.DIST.distill_prune import _build_hrnet_channel_index_map
 
-                if hasattr(model, 'student') and hasattr(model.student, 'state_dict'):
-                    channel_map = _build_hrnet_channel_index_map(
-                        model.student.state_dict(),
-                        new_extra,
-                        criterion=self.importance_criterion,
-                    )
+                    if hasattr(model, 'student') and hasattr(model.student, 'state_dict'):
+                        channel_map = _build_hrnet_channel_index_map(
+                            model.student.state_dict(),
+                            new_extra,
+                            criterion=self.importance_criterion,
+                        )
             except Exception:
                 channel_map = None
 
