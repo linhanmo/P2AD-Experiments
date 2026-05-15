@@ -13,7 +13,6 @@ model = dict(
             hm_max=0.25,
             proto_max=0.25,
         ),
-        adaptive_align=dict(enable=False),
         pose_prune=dict(enable=False),
     )
 )

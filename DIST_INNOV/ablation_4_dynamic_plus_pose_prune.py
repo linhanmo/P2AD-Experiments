@@ -13,7 +13,6 @@ model = dict(
             hm_max=0.25,
             proto_max=0.25,
         ),
-        adaptive_align=dict(enable=False),
         pose_prune=dict(
             enable=True,
             ema_momentum=0.95,
@@ -27,4 +26,3 @@ model = dict(
 prune_hook = dict(importance_criterion='pose_proto')
 
 work_dir = 'experiments/DIST_INNOV/work_dirs/ablation_4_dynamic_plus_pose_prune'
-

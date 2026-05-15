@@ -1,0 +1,10 @@
+source,venue,year,method,input_size,split,detector_setting,AP,AP50,AP75,AR,params_M,gflops,eq_prune_rate_params,eq_prune_rate_gflops,baseline_params_M,baseline_gflops,notes
+HRNet-Human-Pose-Estimation,CVPR,2019,pose_hrnet_w48,384x288,COCO val2017,person AP=56.4,0.763,0.908,0.829,0.812,63.6,32.9,0.0000,0.0000,63.6,32.9,official baseline (repo table)
+APRCP-HRNet (paper draft+repo),,2021,HRNet-W48 (baseline),384x288,COCO val2017,person AP=56.4,0.781,0.936,0.849,0.809,63.6,32.9,0.0000,0.0000,63.6,32.9,baseline as reported by APRCP-HRNet table (val2017)
+APRCP-HRNet (paper draft+repo),,2021,APRC-HRNet-W48 v1 (Simple),384x288,COCO val2017,person AP=56.4,0.781,0.936,0.849,0.807,45.9,21.0,0.2780,0.3610,63.6,32.9,r=0.36; Params(PR)=27.8%; GFLOPS(PR)=36.1%
+APRCP-HRNet (paper draft+repo),,2021,APRC-HRNet-W48 v1 (Golden),384x288,COCO val2017,person AP=56.4,0.781,0.936,0.849,0.807,45.2,21.0,0.2890,0.3610,63.6,32.9,r=0.37; Params(PR)=28.9%; GFLOPS(PR)=36.1%
+APRCP-HRNet (paper draft+repo),,2021,APRC-HRNet-W48 v2 (Simple),384x288,COCO val2017,person AP=56.4,0.781,0.935,0.848,0.809,28.7,17.3,0.5490,0.4730,63.6,32.9,r=0.58; Params(PR)=54.9%; GFLOPS(PR)=47.3%
+APRCP-HRNet (paper draft+repo),,2021,APRC-HRNet-W48 v2 (Golden),384x288,COCO val2017,person AP=56.4,0.782,0.936,0.847,0.807,26.6,16.4,0.5820,0.5010,63.6,32.9,r=0.61; Params(PR)=58.2%; GFLOPS(PR)=50.1%
+APRCP-HRNet (paper draft+repo),,2021,APRC-HRNet-W48 v1 (Manual),384x288,COCO val2017,person AP=56.4,0.775,0.935,0.847,0.800,19.7,9.8,0.6900,0.7030,63.6,32.9,r=0.78; Params(PR)=69.0%; GFLOPS(PR)=70.3%
+APRCP-HRNet (paper draft+repo),,2021,APRC-HRNet-W48 v2 (Manual),384x288,COCO val2017,person AP=56.4,0.777,0.935,0.847,0.802,16.6,11.7,0.7390,0.6450,63.6,32.9,r=0.78; Params(PR)=73.9%; GFLOPS(PR)=64.5%
+HACR,Pattern Recognition Letters,2023,HRNet-W48 pruned (HACR),384x288,COCO val2017,,,,,26.6,16.4,0.5820,0.5010,63.6,32.9,DOI page states: HRNet-W48 reduces 58.2% Params and 50.1% FLOPS "without loss of precision" (AP not explicitly provided on public abstract page)

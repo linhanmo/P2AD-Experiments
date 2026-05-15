@@ -109,6 +109,8 @@ def _candidate_extra_for_target_ratio(
     prune_stages=(3, 4),
     prune_branches_stage3=(2,),
     prune_branches_stage4=(2, 3),
+    branch_weight_stage3=None,
+    branch_weight_stage4=None,
     alpha=1.0,
 ):
     extra = copy.deepcopy(base_extra)
@@ -120,6 +122,16 @@ def _candidate_extra_for_target_ratio(
 
     w3 = [0.25, 0.6, 1.0]
     w4 = [0.2, 0.5, 0.8, 1.0]
+    try:
+        if isinstance(branch_weight_stage3, (list, tuple)) and branch_weight_stage3:
+            w3 = [float(x) for x in branch_weight_stage3]
+    except Exception:
+        pass
+    try:
+        if isinstance(branch_weight_stage4, (list, tuple)) and branch_weight_stage4:
+            w4 = [float(x) for x in branch_weight_stage4]
+    except Exception:
+        pass
 
     new_s3 = []
     for i, ch in enumerate(s3):
@@ -167,6 +179,8 @@ def _search_extra_for_param_prune_target(
     prune_stages=(3, 4),
     prune_branches_stage3=(2,),
     prune_branches_stage4=(2, 3),
+    branch_weight_stage3=None,
+    branch_weight_stage4=None,
 ):
     target_ratio = float(target_ratio)
     if base_params is None or base_params <= 0:
@@ -176,6 +190,8 @@ def _search_extra_for_param_prune_target(
                 target_ratio,
                 round_to=round_to,
                 prune_stages=prune_stages,
+                branch_weight_stage3=branch_weight_stage3,
+                branch_weight_stage4=branch_weight_stage4,
                 alpha=1.0,
             ),
             None,
@@ -199,6 +215,8 @@ def _search_extra_for_param_prune_target(
             prune_stages=prune_stages,
             prune_branches_stage3=prune_branches_stage3,
             prune_branches_stage4=prune_branches_stage4,
+            branch_weight_stage3=branch_weight_stage3,
+            branch_weight_stage4=branch_weight_stage4,
             alpha=a,
         )
         cfg_base['backbone']['extra'] = copy.deepcopy(ex)
@@ -476,10 +494,14 @@ class HRNetPruneRecoverHook(Hook):
         immediate_prune_at_start=False,
         prune_step_ratio=0.1,
         max_prune_ratio=0.5,
+        max_prune_ratio_stage3=None,
+        max_prune_ratio_stage4=None,
         post_switch_ratio=0.4,
         post_step_ratio=0.05,
         step_schedule=None,
         round_to=16,
+        branch_weight_stage3=None,
+        branch_weight_stage4=None,
         min_ap_drop=0.003,
         recover_margin=0.0,
         recover_drop_tolerance=0.003,
@@ -505,6 +527,18 @@ class HRNetPruneRecoverHook(Hook):
         self.immediate_prune_at_start = bool(immediate_prune_at_start)
         self.prune_step_ratio = float(prune_step_ratio)
         self.max_prune_ratio = float(max_prune_ratio)
+        self.max_prune_ratio_stage3 = None
+        self.max_prune_ratio_stage4 = None
+        try:
+            if isinstance(max_prune_ratio_stage3, dict) and max_prune_ratio_stage3:
+                self.max_prune_ratio_stage3 = {int(k): float(v) for k, v in max_prune_ratio_stage3.items()}
+        except Exception:
+            self.max_prune_ratio_stage3 = None
+        try:
+            if isinstance(max_prune_ratio_stage4, dict) and max_prune_ratio_stage4:
+                self.max_prune_ratio_stage4 = {int(k): float(v) for k, v in max_prune_ratio_stage4.items()}
+        except Exception:
+            self.max_prune_ratio_stage4 = None
         self.post_switch_ratio = float(post_switch_ratio)
         self.post_step_ratio = float(post_step_ratio)
         self.step_schedule = None
@@ -525,6 +559,18 @@ class HRNetPruneRecoverHook(Hook):
             except Exception:
                 self.step_schedule = None
         self.round_to = int(round_to)
+        self.branch_weight_stage3 = None
+        self.branch_weight_stage4 = None
+        try:
+            if isinstance(branch_weight_stage3, (list, tuple)) and branch_weight_stage3:
+                self.branch_weight_stage3 = [float(x) for x in branch_weight_stage3]
+        except Exception:
+            self.branch_weight_stage3 = None
+        try:
+            if isinstance(branch_weight_stage4, (list, tuple)) and branch_weight_stage4:
+                self.branch_weight_stage4 = [float(x) for x in branch_weight_stage4]
+        except Exception:
+            self.branch_weight_stage4 = None
         self.min_ap_drop = float(min_ap_drop)
         self.recover_margin = float(recover_margin)
         self.recover_drop_tolerance = float(recover_drop_tolerance)
@@ -551,6 +597,48 @@ class HRNetPruneRecoverHook(Hook):
         self.recovering = False
         self.recover_target_ap = None
         self._forced_start_prune_done = False
+
+    def _apply_branch_max_prune_ratio(self, ex):
+        if not isinstance(ex, dict) or not isinstance(self.base_extra, dict):
+            return
+        rt = max(1, int(self.round_to))
+
+        def _round_up(x):
+            x = int(x)
+            return int(((x + rt - 1) // rt) * rt)
+
+        def _clamp_stage(stage_name, max_ratio_map):
+            if not isinstance(max_ratio_map, dict) or not max_ratio_map:
+                return
+            base_stage = self.base_extra.get(stage_name, {})
+            cur_stage = ex.get(stage_name, {})
+            base_nc = list(base_stage.get('num_channels', ()))
+            cur_nc = list(cur_stage.get('num_channels', ()))
+            if not base_nc or not cur_nc:
+                return
+            changed = False
+            for b, mr in max_ratio_map.items():
+                if not isinstance(b, int) or b < 0 or b >= len(cur_nc) or b >= len(base_nc):
+                    continue
+                try:
+                    mr = max(0.0, min(1.0, float(mr)))
+                except Exception:
+                    continue
+                base_c = int(base_nc[b])
+                min_keep = int(round(float(base_c) * (1.0 - mr)))
+                min_keep = max(rt, _round_up(min_keep))
+                if int(cur_nc[b]) < int(min_keep):
+                    cur_nc[b] = int(min_keep)
+                    changed = True
+            if changed:
+                cur_stage = dict(cur_stage)
+                cur_stage['num_channels'] = tuple(int(x) for x in cur_nc)
+                ex[stage_name] = cur_stage
+
+        if 3 in self.prune_stages:
+            _clamp_stage('stage3', self.max_prune_ratio_stage3)
+        if 4 in self.prune_stages:
+            _clamp_stage('stage4', self.max_prune_ratio_stage4)
 
     def _pick_step_ratio(self, cur_ratio):
         r = max(0.0, min(1.0, float(cur_ratio)))
@@ -712,6 +800,8 @@ class HRNetPruneRecoverHook(Hook):
                     prune_stages=self.prune_stages,
                     prune_branches_stage3=self.prune_branches_stage3,
                     prune_branches_stage4=self.prune_branches_stage4,
+                    branch_weight_stage3=self.branch_weight_stage3,
+                    branch_weight_stage4=self.branch_weight_stage4,
                 )
             except Exception:
                 new_extra = _candidate_extra_for_target_ratio(
@@ -721,6 +811,8 @@ class HRNetPruneRecoverHook(Hook):
                     prune_stages=self.prune_stages,
                     prune_branches_stage3=self.prune_branches_stage3,
                     prune_branches_stage4=self.prune_branches_stage4,
+                    branch_weight_stage3=self.branch_weight_stage3,
+                    branch_weight_stage4=self.branch_weight_stage4,
                     alpha=1.0,
                 )
         else:
@@ -731,6 +823,8 @@ class HRNetPruneRecoverHook(Hook):
                 prune_stages=self.prune_stages,
                 prune_branches_stage3=self.prune_branches_stage3,
                 prune_branches_stage4=self.prune_branches_stage4,
+                branch_weight_stage3=self.branch_weight_stage3,
+                branch_weight_stage4=self.branch_weight_stage4,
                 alpha=1.0,
             )
 
@@ -761,6 +855,12 @@ class HRNetPruneRecoverHook(Hook):
                     new_extra['stage3'] = stage3_new
                     new_extra['stage4'] = stage4_new
                     runner.logger.info(f'Clamp prune extra to be monotonic at epoch {current_epoch}')
+            except Exception:
+                pass
+
+        if isinstance(new_extra, dict):
+            try:
+                self._apply_branch_max_prune_ratio(new_extra)
             except Exception:
                 pass
 

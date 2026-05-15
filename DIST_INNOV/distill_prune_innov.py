@@ -22,88 +22,6 @@ def _norm_spatial(x: torch.Tensor, eps: float = 1.0e-5) -> torch.Tensor:
     return (x - mean) / torch.sqrt(var + eps)
 
 
-class CrossArchAdaptiveAlign(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        hidden: int = 256,
-        eps: float = 1.0e-5,
-        normalize: bool = True,
-        cond_channels: Optional[int] = None,
-    ):
-        super().__init__()
-        self.eps = float(eps)
-        self.normalize = bool(normalize)
-        self.proj = nn.Conv2d(int(in_channels), int(out_channels), kernel_size=1, stride=1, padding=0, bias=False)
-        nn.init.kaiming_normal_(self.proj.weight, mode='fan_out', nonlinearity='relu')
-
-        self._cond_channels = None if cond_channels is None else int(cond_channels)
-        self.cond_proj = None
-        if self._cond_channels is not None and int(self._cond_channels) != int(out_channels):
-            self.cond_proj = nn.Conv2d(
-                int(self._cond_channels),
-                int(out_channels),
-                kernel_size=1,
-                stride=1,
-                padding=0,
-                bias=False,
-            )
-            nn.init.kaiming_normal_(self.cond_proj.weight, mode='fan_out', nonlinearity='relu')
-
-        self.base_gamma = nn.Parameter(torch.ones(1, int(out_channels), 1, 1))
-        self.base_beta = nn.Parameter(torch.zeros(1, int(out_channels), 1, 1))
-        self.cond = nn.Sequential(
-            nn.Linear(int(out_channels), int(hidden), bias=True),
-            nn.SiLU(),
-            nn.Linear(int(hidden), int(out_channels) * 2, bias=True),
-        )
-        try:
-            last = self.cond[-1]
-            if isinstance(last, nn.Linear):
-                nn.init.zeros_(last.weight)
-                nn.init.zeros_(last.bias)
-        except Exception:
-            pass
-
-    def forward(self, x: torch.Tensor, cond_map: Optional[torch.Tensor] = None) -> torch.Tensor:
-        y = self.proj(x)
-        if self.normalize:
-            y = _norm_spatial(y, eps=self.eps)
-        y = y * self.base_gamma + self.base_beta
-
-        if cond_map is None:
-            return y
-
-        if isinstance(cond_map, torch.Tensor):
-            if self.cond_proj is not None:
-                cond_map = self.cond_proj(cond_map)
-            else:
-                c_src = int(cond_map.size(1))
-                c_tgt = int(y.size(1))
-                if c_src > c_tgt:
-                    cond_map = cond_map[:, :c_tgt]
-                elif c_src < c_tgt:
-                    pad = torch.zeros(
-                        cond_map.size(0),
-                        c_tgt - c_src,
-                        cond_map.size(2),
-                        cond_map.size(3),
-                        device=cond_map.device,
-                        dtype=cond_map.dtype,
-                    )
-                    cond_map = torch.cat([cond_map, pad], dim=1)
-        if cond_map.shape[-2:] != y.shape[-2:]:
-            cond_map = F.interpolate(cond_map, size=y.shape[-2:], mode='bilinear', align_corners=False)
-        g = cond_map.mean(dim=(2, 3))
-        gb = self.cond(g)
-        c = y.size(1)
-        gamma, beta = gb[:, :c], gb[:, c:]
-        gamma = gamma.view(-1, c, 1, 1)
-        beta = beta.view(-1, c, 1, 1)
-        return y * (1.0 + gamma) + beta
-
-
 def _get_prune_ratio_from_state(state: Dict) -> float:
     for k in ['param_prune_rate', 'prune_rate', 'target_ratio', 'mid_ratio', 'high_ratio']:
         v = state.get(k, None)
@@ -288,6 +206,21 @@ def _masked_l1(a: torch.Tensor, b: torch.Tensor, m: torch.Tensor, eps: float = 1
     m = m.clamp_min(0.0)
     m = m / (m.sum(dim=(2, 3), keepdim=True) + float(eps))
     return ((a - b).abs() * m).sum(dim=(1, 2, 3)).mean()
+
+
+def _copy_tensor_slices(dst: torch.Tensor, src: torch.Tensor) -> Optional[torch.Tensor]:
+    if not isinstance(dst, torch.Tensor) or not isinstance(src, torch.Tensor):
+        return None
+    if dst.dtype != src.dtype:
+        src = src.to(dtype=dst.dtype)
+    if dst.device != src.device:
+        src = src.to(device=dst.device)
+    if dst.dim() != src.dim():
+        return None
+    slices = tuple(slice(0, min(dst.size(i), src.size(i))) for i in range(dst.dim()))
+    out = dst.clone()
+    out[slices] = src[slices].clone()
+    return out
 
 
 def _update_ema(dst: Optional[torch.Tensor], src: torch.Tensor, momentum: float) -> torch.Tensor:
@@ -591,15 +524,16 @@ def _build_hrnet_channel_index_map_pose_protect(
 class TopDownDistillPruneInnov(TopDownDistillPrune):
     def __init__(self, *args, student_init_ckpt=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self._adaptive_align = None
         self._pose_channel_scores = {'stage3': {}, 'stage4': {}}
         self._pose_joint_scores = {'stage3': {}, 'stage4': {}}
         self._joint_vis_ema = None
         self._stage3_cache = None
         self._stage3_hook_handle = None
+        self._hm_sup_heads = None
+        self._hm_sup_cfg = None
         self._maybe_load_student_ckpt(student_init_ckpt)
         self._install_feature_hooks()
-        self._build_adaptive_align()
+        self._rebuild_heatmap_supervision_heads()
 
     def _maybe_load_student_ckpt(self, ckpt_path):
         if ckpt_path is None:
@@ -692,30 +626,77 @@ class TopDownDistillPruneInnov(TopDownDistillPrune):
         except Exception:
             self._stage3_hook_handle = None
 
-    def _build_adaptive_align(self):
-        aa = self.distill_cfg.get('adaptive_align', None)
-        if not isinstance(aa, dict) or not bool(aa.get('enable', False)):
-            self._adaptive_align = None
+    def _rebuild_heatmap_supervision_heads(self):
+        cfg = self.distill_cfg.get('heatmap_supervision', None)
+        if not isinstance(cfg, dict) or not bool(cfg.get('enable', False)):
+            self._hm_sup_heads = None
+            self._hm_sup_cfg = None
             return
-        in_ch = int(self._infer_student_feat_channels())
-        out_ch = int(self.distill_cfg.get('proto_adaptor_out_channels', 64))
-        hidden = int(aa.get('hidden', 256))
-        eps = float(aa.get('eps', 1.0e-5))
-        normalize = bool(aa.get('normalize', True))
-        cond_ch = aa.get('cond_channels', out_ch)
-        self._adaptive_align = CrossArchAdaptiveAlign(
-            in_ch,
-            out_ch,
-            hidden=hidden,
-            eps=eps,
-            normalize=normalize,
-            cond_channels=cond_ch,
-        )
+        self._hm_sup_cfg = copy.deepcopy(cfg)
+
+        branches = cfg.get('branches', None)
+        if not isinstance(branches, (list, tuple)) or not branches:
+            branches = [('stage3', 2, 0.1), ('stage4', 2, 0.1), ('stage4', 3, 0.1)]
+
+        extra = self.student_cfg.get('backbone', {}).get('extra', {})
+        s3_nc = list(extra.get('stage3', {}).get('num_channels', ()))
+        s4_nc = list(extra.get('stage4', {}).get('num_channels', ()))
+
+        out_k = cfg.get('out_channels', None)
+        if out_k is None:
+            out_k = getattr(getattr(self.student, 'keypoint_head', None), 'out_channels', None)
+        if out_k is None:
+            out_k = cfg.get('num_joints', 17)
+        out_k = int(out_k)
+        new_heads = nn.ModuleDict()
+        for it in branches:
+            try:
+                stage = str(it[0])
+                bid = int(it[1])
+            except Exception:
+                continue
+            if stage == 'stage3':
+                if bid < 0 or bid >= len(s3_nc):
+                    continue
+                in_ch = int(s3_nc[bid])
+            elif stage == 'stage4':
+                if bid < 0 or bid >= len(s4_nc):
+                    continue
+                in_ch = int(s4_nc[bid])
+            else:
+                continue
+            key = f'{stage}_b{bid}'
+            head = nn.Conv2d(in_ch, out_k, kernel_size=1, stride=1, padding=0, bias=True)
+            nn.init.kaiming_normal_(head.weight, mode='fan_out', nonlinearity='relu')
+            if head.bias is not None:
+                nn.init.zeros_(head.bias)
+            new_heads[key] = head
+
         try:
             device = next(self.student.parameters()).device
-            self._adaptive_align = self._adaptive_align.to(device)
+            new_heads = new_heads.to(device)
         except Exception:
             pass
+
+        old_heads = self._hm_sup_heads
+        self._hm_sup_heads = new_heads
+        if isinstance(old_heads, nn.ModuleDict):
+            for k, m in self._hm_sup_heads.items():
+                if k not in old_heads:
+                    continue
+                try:
+                    ow = getattr(old_heads[k], 'weight', None)
+                    ob = getattr(old_heads[k], 'bias', None)
+                    if isinstance(ow, torch.Tensor) and isinstance(m.weight, torch.Tensor):
+                        copied = _copy_tensor_slices(m.weight, ow)
+                        if copied is not None:
+                            m.weight.data.copy_(copied)
+                    if hasattr(m, 'bias') and isinstance(m.bias, torch.Tensor) and isinstance(ob, torch.Tensor):
+                        copied = _copy_tensor_slices(m.bias, ob)
+                        if copied is not None:
+                            m.bias.data.copy_(copied)
+                except Exception:
+                    continue
 
     def prune_student_backbone_extra(self, new_extra, channel_map=None, importance_criterion='bn_gamma'):
         criterion = str(importance_criterion).lower()
@@ -748,7 +729,7 @@ class TopDownDistillPruneInnov(TopDownDistillPrune):
         self.student = new_student
         self.student_cfg = new_cfg
         self._install_feature_hooks()
-        self._build_adaptive_align()
+        self._rebuild_heatmap_supervision_heads()
 
     def _maybe_update_pose_scores(self, t_hm, t_proto, s_stage3, s_stage4, joint_weights=None):
         pp = self.distill_cfg.get('pose_prune', None)
@@ -894,6 +875,65 @@ class TopDownDistillPruneInnov(TopDownDistillPrune):
             for k, v in sup_losses.items():
                 losses[f'loss_sup_{k}'] = v * heatmap_loss_weight
 
+        hm_sup_cfg = self._hm_sup_cfg
+        hm_sup_heads = self._hm_sup_heads
+        if isinstance(hm_sup_cfg, dict) and isinstance(hm_sup_heads, nn.ModuleDict) and hm_sup_heads:
+            tgt_mode = str(hm_sup_cfg.get('target', 'gt')).strip().lower()
+            loss_type = str(hm_sup_cfg.get('loss', 'mse')).strip().lower()
+            mix_alpha = float(hm_sup_cfg.get('mix_alpha', 0.5))
+            mix_alpha = max(0.0, min(1.0, mix_alpha))
+            temperature = float(hm_sup_cfg.get('temperature', 1.0))
+
+            ref = None
+            if tgt_mode == 'teacher':
+                ref = t_hm.detach()
+            elif tgt_mode == 'mix':
+                if isinstance(t_hm, torch.Tensor) and isinstance(target, torch.Tensor):
+                    tt = t_hm.detach()
+                    if tt.shape[-2:] != target.shape[-2:]:
+                        tt = F.interpolate(tt, size=target.shape[-2:], mode='bilinear', align_corners=False)
+                    ref = target.detach() * mix_alpha + tt * (1.0 - mix_alpha)
+            else:
+                ref = target.detach() if isinstance(target, torch.Tensor) else None
+
+            if isinstance(ref, torch.Tensor):
+                if ref.shape[-2:] != target.shape[-2:]:
+                    ref = F.interpolate(ref, size=target.shape[-2:], mode='bilinear', align_corners=False)
+
+                branches = hm_sup_cfg.get('branches', None)
+                if not isinstance(branches, (list, tuple)) or not branches:
+                    branches = [('stage3', 2, 0.1), ('stage4', 2, 0.1), ('stage4', 3, 0.1)]
+
+                for it in branches:
+                    try:
+                        stage = str(it[0])
+                        bid = int(it[1])
+                        w = float(it[2]) if len(it) >= 3 else float(hm_sup_cfg.get('default_weight', 0.1))
+                    except Exception:
+                        continue
+                    if w <= 0:
+                        continue
+                    xs = None
+                    if stage == 'stage3' and isinstance(s_stage3, (list, tuple)) and 0 <= bid < len(s_stage3):
+                        xs = s_stage3[bid]
+                    if stage == 'stage4' and isinstance(s_stage4, (list, tuple)) and 0 <= bid < len(s_stage4):
+                        xs = s_stage4[bid]
+                    if not isinstance(xs, torch.Tensor):
+                        continue
+                    key = f'{stage}_b{bid}'
+                    if key not in hm_sup_heads:
+                        continue
+                    head = hm_sup_heads[key]
+                    pred = head(xs)
+                    if pred.shape[-2:] != ref.shape[-2:]:
+                        pred = F.interpolate(pred, size=ref.shape[-2:], mode='bilinear', align_corners=False)
+                    if pred.size(1) != ref.size(1):
+                        continue
+                    if loss_type in ['kl', 'spatial_kl']:
+                        losses[f'loss_hm_sup_{stage}_b{bid}'] = _spatial_kl(pred, ref, temperature=temperature) * float(w)
+                    else:
+                        losses[f'loss_hm_sup_{stage}_b{bid}'] = F.mse_loss(pred, ref) * float(w)
+
         hga = self.distill_cfg.get('heatmap_guided_align', None)
         if isinstance(hga, dict) and bool(hga.get('enable', False)):
             with torch.no_grad():
@@ -942,14 +982,8 @@ class TopDownDistillPruneInnov(TopDownDistillPrune):
 
         if proto_w > 0 and isinstance(t_proto, torch.Tensor):
             s_map = _infer_student_feat(s_feat)
-            aa = self.distill_cfg.get('adaptive_align', None)
-            normalize_teacher = bool(isinstance(aa, dict) and bool(aa.get('normalize_teacher', True)))
-            if self._adaptive_align is not None:
-                aligned = self._adaptive_align(s_map, cond_map=t_proto.detach())
-            elif self._proto_adaptor is not None:
-                aligned = self._proto_adaptor(s_map)
-            else:
-                aligned = None
+            normalize_teacher = bool(self.distill_cfg.get('normalize_teacher_proto', True))
+            aligned = self._proto_adaptor(s_map) if self._proto_adaptor is not None else None
             if aligned is not None:
                 if aligned.shape[-2:] != t_proto.shape[-2:]:
                     aligned = F.interpolate(aligned, size=t_proto.shape[-2:], mode='bilinear', align_corners=False)
