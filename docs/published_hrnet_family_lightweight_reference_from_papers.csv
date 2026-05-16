@@ -1,3 +1,0 @@
-source,venue,year,method,base_backbone,input_size,split,detector_setting,AP,params_M,gflops,baseline_notes,notes
-Lite-HRNet,CVPR,2021,Lite-HRNet-18,HRNet-family (lightweight redesign),256x192,COCO val2017,person AP=56.4,0.648,1.1,0.2052,reported as lightweight alternative (not HRNet-W48),numbers from paper table
-Lite-HRNet,CVPR,2021,Lite-HRNet-30,HRNet-family (lightweight redesign),256x192,COCO val2017,person AP=56.4,0.672,1.8,0.3192,reported as lightweight alternative (not HRNet-W48),numbers from paper table

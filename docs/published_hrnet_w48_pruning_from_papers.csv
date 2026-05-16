@@ -1,2 +1,0 @@
-source,venue,year,method,input_size,split,detector_setting,AP,AP50,AP75,AR,params_M,gflops,eq_prune_rate_params,eq_prune_rate_gflops,baseline_params_M,baseline_gflops,notes
-HRNet-Human-Pose-Estimation,CVPR,2019,pose_hrnet_w48,256x192,COCO val2017,person AP=56.4,0.751,0.906,0.822,0.804,63.6,14.6,0.0000,0.0000,63.6,14.6,official baseline (repo table)
