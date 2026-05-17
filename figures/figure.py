@@ -243,8 +243,15 @@ def _linear_map(v: float, vmin: float, vmax: float, pmin: float, pmax: float) ->
 
 def _svg_marker(cat: str, cx: float, cy: float, color: str, r: float, opacity: float = 0.8) -> str:
     if cat == 'Ours':
-        w = r * 2.0
-        return f'<rect x="{cx - r:.2f}" y="{cy - r:.2f}" width="{w:.2f}" height="{w:.2f}" fill="{color}" opacity="{opacity:.3f}"/>'
+        outer = r
+        inner = r * 0.45
+        pts = []
+        for i in range(10):
+            ang = (-90.0 + i * 36.0) * 3.141592653589793 / 180.0
+            rr = outer if (i % 2 == 0) else inner
+            pts.append((cx + rr * __import__('math').cos(ang), cy + rr * __import__('math').sin(ang)))
+        pts_s = ' '.join([f'{x:.2f},{y:.2f}' for x, y in pts])
+        return f'<polygon points="{pts_s}" fill="{color}" opacity="{opacity:.3f}"/>'
     if cat == 'HRNet':
         pts = f'{cx:.2f},{cy - r:.2f} {cx - r:.2f},{cy + r:.2f} {cx + r:.2f},{cy + r:.2f}'
         return f'<polygon points="{pts}" fill="{color}" opacity="{opacity:.3f}"/>'
@@ -271,20 +278,8 @@ def _svg_marker(cat: str, cx: float, cy: float, color: str, r: float, opacity: f
         pts_s = ' '.join([f'{x:.2f},{y:.2f}' for x, y in pts])
         return f'<polygon points="{pts_s}" fill="{color}" opacity="{opacity:.3f}"/>'
     if cat == 'Dynamic Resolution':
-        pts = [
-            (cx, cy - r),
-            (cx + r * 0.23, cy - r * 0.23),
-            (cx + r, cy - r * 0.23),
-            (cx + r * 0.35, cy + r * 0.15),
-            (cx + r * 0.55, cy + r),
-            (cx, cy + r * 0.45),
-            (cx - r * 0.55, cy + r),
-            (cx - r * 0.35, cy + r * 0.15),
-            (cx - r, cy - r * 0.23),
-            (cx - r * 0.23, cy - r * 0.23),
-        ]
-        pts_s = ' '.join([f'{x:.2f},{y:.2f}' for x, y in pts])
-        return f'<polygon points="{pts_s}" fill="{color}" opacity="{opacity:.3f}"/>'
+        w = r * 2.0
+        return f'<rect x="{cx - r:.2f}" y="{cy - r:.2f}" width="{w:.2f}" height="{w:.2f}" fill="{color}" opacity="{opacity:.3f}"/>'
     return f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r:.2f}" fill="{color}" opacity="{opacity:.3f}"/>'
 
 
@@ -295,6 +290,8 @@ def _svg_label_pos(label: str) -> Tuple[float, float, str]:
         return 10.0, 12.0, 'start'
     if (label or '').strip() == 'GTPT-S':
         return 10.0, 0.0, 'start'
+    if (label or '').strip() == 'DRP-Net-M':
+        return 10.0, 12.0, 'start'
     if (label or '').strip() == 'HRNet-W48 (Original)':
         return 10.0, 12.0, 'start'
     if (label or '').strip() == 'HRNet-W48 (Fine-Tuning+PTQ-INT8)':
@@ -501,7 +498,7 @@ def _plot_ap_gflops_pareto_svg(points: List[ParetoPoint], frontier: List[ParetoP
     }
     marker_r = {
         'HRNet': 5.6,
-        'Ours': 6.0,
+        'Ours': 8.0,
         'Lightweight': 5.2,
         'General': 5.0,
         'Efficient ViT': 5.6,
@@ -534,8 +531,9 @@ def _plot_ap_gflops_pareto_svg(points: List[ParetoPoint], frontier: List[ParetoP
         elements.append(_svg_marker(cat, px, py, color, r, opacity=0.78))
         if p.label in label_set:
             dx, dy, anchor = _svg_label_pos(label)
+            fw = '700' if str(label).startswith('Ours') else '400'
             elements.append(
-                f'<text x="{px+dx:.2f}" y="{py+dy:.2f}" text-anchor="{anchor}" font-size="10.5" font-family="Times New Roman, Times, serif" fill="#111">{_svg_escape(label)}</text>'
+                f'<text x="{px+dx:.2f}" y="{py+dy:.2f}" text-anchor="{anchor}" font-size="10.5" font-family="Times New Roman, Times, serif" font-weight="{fw}" fill="#111">{_svg_escape(label)}</text>'
             )
 
     lx = x0 + 18
@@ -579,6 +577,10 @@ def plot_ap_gflops_pareto(comparison_csv: str, out_dir: str) -> str:
         res = _norm_res(r.get('输入尺寸') or '')
         if not name or gflops is None or ap is None:
             continue
+        if name in ['HRNet-W48(PTQ-INT8)', 'HRNet-W48(QAT-INT8)']:
+            continue
+        if name.startswith('GTPT-') and name != 'GTPT-B':
+            continue
         try:
             x = _to_float(gflops)
             y = _to_float(ap)
@@ -608,16 +610,16 @@ def plot_ap_gflops_pareto(comparison_csv: str, out_dir: str) -> str:
     }
     markers = {
         'HRNet': '^',
-        'Ours': 's',
+        'Ours': '*',
         'Lightweight': 'o',
         'General': 'o',
         'Efficient ViT': 'p',
         'Token Pruning': 'h',
-        'Dynamic Resolution': '*',
+        'Dynamic Resolution': 's',
     }
     sizes = {
         'HRNet': 64,
-        'Ours': 82,
+        'Ours': 190,
         'Lightweight': 54,
         'General': 50,
         'Efficient ViT': 68,
@@ -702,12 +704,17 @@ def plot_ap_gflops_pareto(comparison_csv: str, out_dir: str) -> str:
             label_set.add(p.label)
     for p in pts:
         if p.label in label_set:
-            if p.label == 'Ours (slight loss)':
-                ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(0, -12), ha='center', va='top', fontsize=8)
+            if str(p.label).startswith('Ours'):
+                if p.label == 'Ours (slight loss)':
+                    ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(0, -12), ha='center', va='top', fontsize=8, fontweight='bold')
+                else:
+                    ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(6, 6), ha='left', va='bottom', fontsize=8, fontweight='bold')
             elif p.label == 'HEViTPose-B':
                 ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(8, -12), ha='left', va='top', fontsize=8)
             elif p.label == 'GTPT-S':
                 ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(8, 0), ha='left', va='center', fontsize=8)
+            elif p.label == 'DRP-Net-M':
+                ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(8, -12), ha='left', va='top', fontsize=8)
             elif p.label == 'HRNet-W48 (Original)':
                 ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(8, -12), ha='left', va='top', fontsize=8)
             elif p.label == 'HRNet-W48 (Fine-Tuning+PTQ-INT8)':
@@ -728,12 +735,12 @@ def plot_ap_gflops_pareto(comparison_csv: str, out_dir: str) -> str:
 
         handles = [
             Line2D([], [], linestyle='None', marker='^', markersize=8.5, markerfacecolor=palette['HRNet'], markeredgecolor='white', label='HRNet'),
-            Line2D([], [], linestyle='None', marker='s', markersize=9.0, markerfacecolor=palette['Ours'], markeredgecolor='white', label='Ours'),
+            Line2D([], [], linestyle='None', marker='*', markersize=12.5, markerfacecolor=palette['Ours'], markeredgecolor='white', label='Ours'),
             Line2D([], [], linestyle='None', marker='o', markersize=8.5, markerfacecolor=palette['Lightweight'], markeredgecolor='white', label='Lightweight'),
             Line2D([], [], linestyle='None', marker='o', markersize=8.5, markerfacecolor=palette['General'], markeredgecolor='none', label='General Backbone'),
             Line2D([], [], linestyle='None', marker='p', markersize=9.0, markerfacecolor=palette['Efficient ViT'], markeredgecolor='white', label='Efficient ViT'),
             Line2D([], [], linestyle='None', marker='h', markersize=8.9, markerfacecolor=palette['Token Pruning'], markeredgecolor='white', label='Token Pruning'),
-            Line2D([], [], linestyle='None', marker='*', markersize=10.0, markerfacecolor=palette['Dynamic Resolution'], markeredgecolor='white', label='Dynamic Resolution'),
+            Line2D([], [], linestyle='None', marker='s', markersize=9.6, markerfacecolor=palette['Dynamic Resolution'], markeredgecolor='white', label='Dynamic Resolution'),
             Line2D([], [], linestyle='None', marker='o', markersize=8.6, markerfacecolor='none', markeredgecolor=ring_color['256x192'], label='Input 256×192'),
             Line2D([], [], linestyle='None', marker='o', markersize=8.6, markerfacecolor='none', markeredgecolor=ring_color['384x288'], label='Input 384×288'),
         ]
