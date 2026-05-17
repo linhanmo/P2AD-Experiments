@@ -40,7 +40,7 @@ def _en_label(name: str) -> str:
         'HRNet-W48(PTQ-INT8)': 'HRNet-W48 (Fine-Tuning+PTQ-INT8)',
         'HRNet-W48(QAT-INT8)': 'HRNet-W48 (Fine-Tuning+QAT-INT8)',
         '完整框架严格无损': 'Ours (lossless)',
-        '完整框架可接受损失': 'Ours (slight loss)',
+        '完整框架可接受损失': 'Ours (acceptable loss)',
         'SimpleBaseline (ResNet‑50)': 'ResNet-50',
         'SimpleBaseline (ResNet-50)': 'ResNet-50',
         'EEffPose‑P2 (EfficientNet)': 'EEffPose-P2',
@@ -284,7 +284,7 @@ def _svg_marker(cat: str, cx: float, cy: float, color: str, r: float, opacity: f
 
 
 def _svg_label_pos(label: str) -> Tuple[float, float, str]:
-    if (label or '').strip() == 'Ours (slight loss)':
+    if (label or '').strip() == 'Ours (acceptable loss)':
         return 0.0, 12.0, 'middle'
     if (label or '').strip() == 'HEViTPose-B':
         return 10.0, 12.0, 'start'
@@ -705,7 +705,7 @@ def plot_ap_gflops_pareto(comparison_csv: str, out_dir: str) -> str:
     for p in pts:
         if p.label in label_set:
             if str(p.label).startswith('Ours'):
-                if p.label == 'Ours (slight loss)':
+                if p.label == 'Ours (acceptable loss)':
                     ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(0, -12), ha='center', va='top', fontsize=8, fontweight='bold')
                 else:
                     ax.annotate(p.label, (p.x, p.y), textcoords='offset points', xytext=(6, 6), ha='left', va='bottom', fontsize=8, fontweight='bold')

@@ -38,7 +38,7 @@
 <circle cx="367.14" cy="122.75" r="9.90" fill="none" stroke="#ff2d95" stroke-width="2.6" opacity="0.10"/>
 <circle cx="367.14" cy="122.75" r="9.90" fill="none" stroke="#ff2d95" stroke-width="1.2" opacity="0.65"/>
 <polygon points="367.14,114.75 369.26,119.84 374.75,120.28 370.57,123.86 371.85,129.22 367.14,126.35 362.44,129.22 363.72,123.86 359.53,120.28 365.03,119.84" fill="#e45756" opacity="0.780"/>
-<text x="367.14" y="134.75" text-anchor="middle" font-size="10.5" font-family="Times New Roman, Times, serif" font-weight="700" fill="#111">Ours (slight loss)</text>
+<text x="367.14" y="134.75" text-anchor="middle" font-size="10.5" font-family="Times New Roman, Times, serif" font-weight="700" fill="#111">Ours (acceptable loss)</text>
 <circle cx="727.14" cy="178.66" r="7.10" fill="none" stroke="#ff2d95" stroke-width="2.6" opacity="0.10"/>
 <circle cx="727.14" cy="178.66" r="7.10" fill="none" stroke="#ff2d95" stroke-width="1.2" opacity="0.65"/>
 <circle cx="727.14" cy="178.66" r="5.20" fill="#54a24b" opacity="0.780"/>
