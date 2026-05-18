@@ -1,0 +1,17 @@
+graph TD
+    A[Input Image] --> B(HRNet-W48 Backbone)
+    B --> C[Multi-Resolution Feature Maps]
+    C --> D{Pose-Aware Channel Pruning}
+    D -->|Zero-out & Error Gain| E[Channel Importance Scores]
+    E --> F[Branch-Differentiated Budget Allocation]
+    F --> G[Redundant Channel Removal]
+    G --> H[Structurally Pruned Model]
+    H --> I{Pruning-Aware Dynamic Distillation}
+    I -->|Stage 1: Stabilize| J[High λ, Global Topology Transfer]
+    I -->|Stage 2: Recover| K[Mid λ, Feature Reconstruction]
+    I -->|Stage 3: Fine-tune| L[Low λ, Local Heatmap Refinement]
+    J & K & L --> M[PoseBH Teacher Guidance]
+    M --> N[Adaptive Knowledge Transfer]
+    H --> N
+    N --> O[Final Compact Pose Estimator]
+    O --> P[Output Heatmaps]
