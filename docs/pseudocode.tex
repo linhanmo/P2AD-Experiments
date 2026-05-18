@@ -2,49 +2,50 @@
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 \usepackage{amsmath}
-\usepackage{float}          % 提供 [H] 选项
+\usepackage{float}
+
+% 自定义 \Input 和 \Output 命令
+\algnewcommand{\Input}{\item[\textbf{Input:}]}
+\algnewcommand{\Output}{\item[\textbf{Output:}]}
 
 \begin{document}
 
 \begin{algorithm}[H]
-\caption{P2AD Training Pipeline (Stage 1)}
-\label{alg:p2ad_part1}
+\caption{Pose-Aware Channel Importance Pruning}
+\label{alg:pose_aware_pruning}
 \begin{algorithmic}[1]
-\Require{Pretrained HRNet-W48 model $\mathcal{M}_0$}
-\Require{PoseBH teacher model $\mathcal{T}$}
-\Require{Training set $\mathcal{D} = \{(x_i, y_i)\}$ with ground-truth heatmaps}
-\Require{Target pruning ratio $R_{\text{target}}$}
-\Require{Number of pruning steps $N$, epochs per step $E$}
-\Ensure{Compact pruned and distilled model $\mathcal{M}^*$}
+\Input{Pretrained HRNet-W48 model $\mathcal{M}_0$, calibration subset $\mathcal{D}_{\text{calib}} \subset \mathcal{D}$, branch pruning budgets $\rho_{\text{high}}$, $\rho_{\text{low}}$, target pruning ratio $R_{\text{target}}$}
+\Output{Structurally pruned model $\mathcal{M}_{\text{pruned}}$, optimal pruning rate $r^*$}
 
-\State \Comment{Stage 1: Pose-Aware Channel Importance Pruning}
 \State $\mathcal{M} \gets \mathcal{M}_0$
+\State \Comment{Step 1: Task-driven channel importance assessment}
 \For{each convolutional channel $c$ in $\mathcal{M}$}
-    \State \Comment{Forward pass with channel $c$ zeroed}
-    \State $\mathbf{H}_c \gets \mathcal{M}(x \mid \text{channel } c \leftarrow 0)$ on a calibration subset
+    \State $\mathbf{H}_c \gets \mathcal{M}(x \mid \text{channel } c \leftarrow 0)$ on $\mathcal{D}_{\text{calib}}$
     \State $\varepsilon_c \gets \| \mathbf{H}_c - y \|^2$
-    \State $\varepsilon_0 \gets \| \mathbf{H}_0 - y \|^2$ \Comment{baseline error without pruning}
+    \State $\varepsilon_0 \gets \| \mathbf{H}_0 - y \|^2$ \Comment{baseline error}
     \State $s(c) \gets \varepsilon_c - \varepsilon_0$ \Comment{importance score: error gain}
 \EndFor
 
-\State \Comment{Apply branch-differentiated budgets}
+\State \Comment{Step 2: Branch-differentiated channel retention}
 \For{each branch $b \in \{\text{high-res}, \text{low-res}\}$}
     \State $S_b \gets \{s(c) \text{ for channels } c \text{ in branch } b\}$
     \If{$b$ is high-resolution branch}
-        \State $\text{keep\_ratio}_b \gets 1 - \rho_{\text{high}}$ \Comment{conservative budget}
+        \State $\text{keep\_ratio}_b \gets 1 - \rho_{\text{high}}$
+        \Comment{conservative budget}
     \Else
-        \State $\text{keep\_ratio}_b \gets 1 - \rho_{\text{low}}$ \Comment{aggressive budget}
+        \State $\text{keep\_ratio}_b \gets 1 - \rho_{\text{low}}$
+        \Comment{aggressive budget}
     \EndIf
     \State $k_b \gets \lceil |S_b| \times \text{keep\_ratio}_b \rceil$
-    \State Retain top $k_b$ channels in branch $b$ according to $S_b$
+    \State Retain top $k_b$ channels in branch $b$ sorted by $S_b$
 \EndFor
 
-\State \Comment{Optional: golden-section search for optimal pruning rate}
+\State \Comment{Step 3: Golden-section search for optimal pruning rate}
 \State Initialize interval $[\alpha, \beta] \gets [0.3, 0.8]$
 \While{$\beta - \alpha > \epsilon$}
     \State $r_1 \gets \alpha + 0.382(\beta - \alpha)$
     \State $r_2 \gets \alpha + 0.618(\beta - \alpha)$
-    \State Evaluate objective $\mathcal{F}(r) = \frac{\text{Acc}(r)}{\text{Acc}_{\max}} + \frac{\text{AP}(r)}{\text{AP}_{\max}} + r$
+    \State Evaluate $\mathcal{F}(r) = \frac{\text{Acc}(r)}{\text{Acc}_{\max}} + \frac{\text{AP}(r)}{\text{AP}_{\max}} + r$
     \If{$\mathcal{F}(r_1) > \mathcal{F}(r_2)$}
         \State $\beta \gets r_2$
     \Else
@@ -53,25 +54,30 @@
 \EndWhile
 \State $r^* \gets (\alpha + \beta)/2$
 \State $\mathcal{M}_{\text{pruned}} \gets \text{Remove channels with lowest scores to reach } r^*$
-\If{$r^*$ does not reach $R_{\text{target}}$}
-    \State increase $\rho_{\text{high}}$, $\rho_{\text{low}}$ accordingly
+\If{$r^* < R_{\text{target}}$}
+    \State Adjust $\rho_{\text{high}}$, $\rho_{\text{low}}$ and repeat from Step 2
 \EndIf
-\algstore{p2ad_part1}
+\State \Return{$\mathcal{M}_{\text{pruned}}$, $r^*$}
 \end{algorithmic}
 \end{algorithm}
 
-\vspace{-\baselineskip}  % 可选的间距微调
 
 \begin{algorithm}[H]
-\caption{P2AD Training Pipeline (Stage 2)}
-\label{alg:p2ad_part2}
+\caption{Pruning-Aware Dynamic Distillation Weight Scheduling}
+\label{alg:dynamic_distillation}
 \begin{algorithmic}[1]
-\algrestore{p2ad_part1}
-\State \Comment{Stage 2: Pruning-Aware Dynamic Distillation}
-\State Initialize $\lambda_{\text{schedule}} \gets [\lambda_{\text{high}}, \lambda_{\text{mid}}, \lambda_{\text{low}}]$
-\State Initialize $\alpha_{\text{schedule}} \gets [1.0, 0.5, 0.0]$ \Comment{$1$: global, $0$: local}
+\Input{Structurally pruned model $\mathcal{M}_{\text{pruned}}$, PoseBH teacher model $\mathcal{T}$, training set $\mathcal{D} = \{(x_i, y_i)\}$, target pruning ratio $R_{\text{target}}$, number of pruning steps $N$, epochs per step $E$}
+\Output{Compact distilled model $\mathcal{M}^*$}
+
+\State \Comment{Initialize dynamic scheduling parameters}
+\State $\lambda_{\text{schedule}} \gets [\lambda_{\text{high}}, \lambda_{\text{mid}}, \lambda_{\text{low}}]$
+\State $\alpha_{\text{schedule}} \gets [1.0, 0.5, 0.0]$
+\Comment{$1$: global, $0$: local}
+
+\State \Comment{Progressive pruning with adaptive distillation}
 \For{$\text{step} = 1$ to $N$}
-    \State Adjust pruning ratio progressively toward $R_{\text{target}}$
+    \State Progressively prune $\mathcal{M}_{\text{pruned}}$ toward $R_{\text{target}}$
+    \State \Comment{Determine pruning stage}
     \If{$\text{step} \leq N/3$}
         \State $\text{stage} \gets \text{structural stabilization}$
     \ElsIf{$\text{step} \leq 2N/3$}
@@ -79,18 +85,17 @@
     \Else
         \State $\text{stage} \gets \text{fine-tuning}$
     \EndIf
-    \State $\lambda \gets \lambda_{\text{schedule}}[\text{stage}]$, $\alpha \gets \alpha_{\text{schedule}}[\text{stage}]$
+    \State $\lambda \gets \lambda_{\text{schedule}}[\text{stage}]$
+    \State $\alpha \gets \alpha_{\text{schedule}}[\text{stage}]$
+
+    \State \Comment{Distillation-guided fine-tuning}
     \For{$\text{epoch} = 1$ to $E$}
         \For{each mini-batch $(x, y) \in \mathcal{D}$}
-            \State \Comment{Forward passes}
-            \State $\mathbf{H}_s, \mathbf{F}_s \gets \mathcal{M}_{\text{pruned}}(x)$ \Comment{student heatmaps, features}
-            \State $\mathbf{H}_t, \mathbf{F}_t \gets \mathcal{T}(x)$ \Comment{teacher heatmaps, features}
-            \State \Comment{Task loss}
+            \State $\mathbf{H}_s, \mathbf{F}_s \gets \mathcal{M}_{\text{pruned}}(x)$
+            \State $\mathbf{H}_t, \mathbf{F}_t \gets \mathcal{T}(x)$
             \State $\mathcal{L}_{\text{task}} \gets \text{MSE}(\mathbf{H}_s, y)$
-            \State \Comment{Distillation losses}
-            \State $\mathcal{L}_{\text{global}} \gets \| \mathbf{F}_s - \mathbf{F}_t \|^2$ \Comment{align high-level features}
-            \State $\mathcal{L}_{\text{local}} \gets \text{KL}(\mathbf{H}_s \| \mathbf{H}_t)$ \Comment{align output distributions}
-            \State \Comment{Combined loss with dynamic weighting}
+            \State $\mathcal{L}_{\text{global}} \gets \| \mathbf{F}_s - \mathbf{F}_t \|^2$
+            \State $\mathcal{L}_{\text{local}} \gets \text{KL}(\mathbf{H}_s \| \mathbf{H}_t)$
             \State $\mathcal{L} \gets \mathcal{L}_{\text{task}} + \lambda \big[ \alpha \cdot \mathcal{L}_{\text{global}} + (1 - \alpha) \cdot \mathcal{L}_{\text{local}} \big]$
             \State Update $\mathcal{M}_{\text{pruned}}$ via AdamW optimizer
         \EndFor
